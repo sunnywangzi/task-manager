@@ -18,9 +18,9 @@ def get_log_file_path(task_name):
     log_dir = os.path.join(BASE_DIR, 'logs', task_name)
     os.makedirs(log_dir, exist_ok=True)
     
-    # 按日期命名的日志文件
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    log_file = os.path.join(log_dir, f"{date_str}.log")
+    # 按时间命名的日志文件
+    time_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    log_file = os.path.join(log_dir, f"{time_str}.log")
     
     # 如果文件不存在则创建
     if not os.path.exists(log_file):
@@ -426,15 +426,20 @@ def run_task(task_name):
 @app.route('/task/log/<task_name>')
 def get_task_log(task_name):
     task = get_task(task_name)
-    if not task or not task.get('log_file'):
-        return jsonify({'error': 'Log file not configured'}), 404
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
     
-    log_file = task['log_file']
-    if not os.path.exists(log_file):
-        return jsonify({'error': 'Log file not found'}), 404
+    log_dir = os.path.join(BASE_DIR, 'logs', task_name)
+    if not os.path.exists(log_dir):
+        return jsonify({'error': 'Log directory not found'}), 404
     
     try:
-        with open(log_file, 'r') as f:
+        log_files = sorted(os.listdir(log_dir), reverse=True)
+        if not log_files:
+            return jsonify({'log': '日志为空'})
+        
+        latest_log_file = os.path.join(log_dir, log_files[0])
+        with open(latest_log_file, 'r') as f:
             content = f.read()
         return jsonify({'log': content})
     except Exception as e:
