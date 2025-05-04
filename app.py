@@ -150,6 +150,30 @@ def check_task_conflict(new_command):
     return False
 
 # Linux 专用函数
+def write_crontab(content_lines):
+    """
+    安全地写入crontab内容，确保格式正确
+    :param content_lines: 内容行列表
+    """
+    # 确保是列表
+    if isinstance(content_lines, str):
+        content_lines = content_lines.splitlines()
+    
+    # 移除空行并确保格式正确
+    cleaned_lines = []
+    for line in content_lines:
+        line = line.rstrip()
+        if line or (cleaned_lines and cleaned_lines[-1]):  # 保留非连续空行
+            cleaned_lines.append(line)
+    
+    # 确保最后有一个空行
+    if cleaned_lines and cleaned_lines[-1]:
+        cleaned_lines.append("")
+    
+    # 写入crontab
+    process = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE)
+    process.communicate(input='\n'.join(cleaned_lines).encode())
+
 def update_cron_job(task):
     # 获取当前cron任务
     try:
@@ -167,8 +191,7 @@ def update_cron_job(task):
     cron_lines.append(f"{task['schedule']} {task['command']}")
     
     # 写入crontab
-    process = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE)
-    process.communicate(input='\n'.join(cron_lines).encode())
+    write_crontab(cron_lines)
 
 def remove_cron_job(task):
     try:
@@ -189,8 +212,7 @@ def remove_cron_job(task):
     new_cron = [line for i, line in enumerate(cron_lines) if i not in to_remove]
     
     # 写入crontab
-    process = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE)
-    process.communicate(input='\n'.join(new_cron).encode())
+    write_crontab(new_cron)
 
 def get_cron_jobs():
     try:
