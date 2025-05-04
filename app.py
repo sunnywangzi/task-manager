@@ -13,6 +13,21 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, 'tasks.db')
 
+def get_log_file_path(task_name):
+    # 创建日志目录
+    log_dir = os.path.join(BASE_DIR, 'logs', task_name)
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 按日期命名的日志文件
+    date_str = datetime.now().strftime('%Y-%m-%d')
+    log_file = os.path.join(log_dir, f"{date_str}.log")
+    
+    # 如果文件不存在则创建
+    if not os.path.exists(log_file):
+        open(log_file, 'w').close()
+    
+    return log_file
+
 # 初始化数据库
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -25,6 +40,7 @@ def init_db():
                   command TEXT,
                   description TEXT,
                   log_file TEXT,
+                  working_dir TEXT,
                   platform TEXT)''')
     
     # 创建历史记录表
@@ -51,9 +67,10 @@ def get_tasks():
 def save_task(task):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''REPLACE INTO tasks VALUES (?,?,?,?,?,?)''',
+    c.execute('''REPLACE INTO tasks VALUES (?,?,?,?,?,?,?)''',
               (task['name'], task['schedule'], task['command'], 
-               task['description'], task['log_file'], platform.system()))
+               task['description'], task.get('log_file', ''),
+               task.get('working_dir', ''), platform.system()))
     conn.commit()
     conn.close()
     update_system_scheduler(task)
@@ -296,7 +313,7 @@ def edit_task(task_name):
     return render_template('edit_task.html', task=task)
 
 @app.route('/task/delete/<task_name>')
-def delete_task_route(task_name):
+def delete_task(task_name):
     delete_task(task_name)
     return redirect(url_for('index'))
 
@@ -306,12 +323,19 @@ def run_task(task_name):
     if not task:
         return jsonify({'error': 'Task not found'}), 404
     
+    # 获取日志文件路径
+    log_file = get_log_file_path(task_name)
+    
     try:
-        # 在Windows上需要特殊处理命令
+        # 在指定工作目录运行命令
+        working_dir = task.get('working_dir', BASE_DIR)
+        os.makedirs(working_dir, exist_ok=True)
+        
         if platform.system() == 'Windows':
             result = subprocess.run(
                 task['command'],
                 shell=True,
+                cwd=working_dir,
                 capture_output=True,
                 text=True,
                 timeout=300
@@ -319,10 +343,22 @@ def run_task(task_name):
         else:
             result = subprocess.run(
                 task['command'].split(),
+                cwd=working_dir,
                 capture_output=True,
                 text=True,
                 timeout=300
             )
+        
+        # 记录日志
+        with open(log_file, 'a') as f:
+            f.write(f"=== 任务执行于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            f.write(f"命令: {task['command']}\n")
+            f.write(f"返回码: {result.returncode}\n")
+            f.write("\n标准输出:\n")
+            f.write(result.stdout)
+            f.write("\n错误输出:\n")
+            f.write(result.stderr)
+            f.write("\n\n")
         
         output = f"Return code: {result.returncode}\n\nStdout:\n{result.stdout}\n\nStderr:\n{result.stderr}"
         record_task_run(task_name, result.returncode == 0, output)
@@ -330,9 +366,14 @@ def run_task(task_name):
         return jsonify({
             'success': True,
             'returncode': result.returncode,
-            'output': output
+            'output': output,
+            'log_file': log_file
         })
     except Exception as e:
+        with open(log_file, 'a') as f:
+            f.write(f"=== 任务执行失败于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            f.write(f"错误: {str(e)}\n\n")
+        
         record_task_run(task_name, False, str(e))
         return jsonify({
             'success': False,
