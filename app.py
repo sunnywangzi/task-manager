@@ -28,6 +28,14 @@ def get_log_file_path(task_name):
     
     return log_file
 
+def get_log_dir(task_name):
+    # 创建日志目录
+    log_dir = os.path.join(BASE_DIR, 'logs', task_name)
+    os.makedirs(log_dir, exist_ok=True)
+    
+    return log_dir
+
+
 # 初始化数据库
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -189,7 +197,7 @@ def update_cron_job(task):
     # 添加新任务(带标签)
     cron_lines.append(f"# TaskManager: {task['name']} - {task['description']}")
     script_path = generate_task_script(task)
-    cron_lines.append(f"{task['schedule']} {script_path} >> {get_log_file_path(task['name'])} 2>&1")
+    cron_lines.append(f"{task['schedule']} {script_path}")
     
     # 写入crontab
     write_crontab(cron_lines)
@@ -268,8 +276,9 @@ def generate_task_script(task):
     script_path = os.path.join(script_dir, f"{task['name']}.sh")
     with open(script_path, 'w') as script_file:
         script_file.write(f"#!/bin/bash\n")
+        script_file.write(f"current_time=$(date +"%Y-%m-%d_%H-%M-%S")\n")        
         script_file.write(f"cd {task.get('working_dir', BASE_DIR)}\n")
-        script_file.write(f"LOG_FILE={get_log_file_path(task['name'])}\n")
+        script_file.write(f"LOG_FILE={get_log_dir(task['name'])}/$current_time.log\n")
         script_file.write(f"{task['command']} >> $LOG_FILE 2>&1\n")
     
     os.chmod(script_path, 0o755)
