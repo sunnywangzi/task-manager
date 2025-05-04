@@ -18,9 +18,9 @@ def get_log_file_path(task_name):
     log_dir = os.path.join(BASE_DIR, 'logs', task_name)
     os.makedirs(log_dir, exist_ok=True)
     
-    # 按日期命名的日志文件
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    log_file = os.path.join(log_dir, f"{date_str}.log")
+    # 按时间命名的日志文件
+    time_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    log_file = os.path.join(log_dir, f"{time_str}.log")
     
     # 如果文件不存在则创建
     if not os.path.exists(log_file):
@@ -188,7 +188,8 @@ def update_cron_job(task):
     
     # 添加新任务(带标签)
     cron_lines.append(f"# TaskManager: {task['name']} - {task['description']}")
-    cron_lines.append(f"{task['schedule']} {task['command']}")
+    script_path = generate_task_script(task)
+    cron_lines.append(f"{task['schedule']} {script_path} >> {get_log_file_path(task['name'])} 2>&1")
     
     # 写入crontab
     write_crontab(cron_lines)
@@ -259,6 +260,20 @@ def get_cron_jobs():
         return jobs
     except subprocess.CalledProcessError:
         return []
+
+def generate_task_script(task):
+    script_dir = os.path.join(BASE_DIR, 'sh')
+    os.makedirs(script_dir, exist_ok=True)
+    
+    script_path = os.path.join(script_dir, f"{task['name']}.sh")
+    with open(script_path, 'w') as script_file:
+        script_file.write(f"#!/bin/bash\n")
+        script_file.write(f"cd {task.get('working_dir', BASE_DIR)}\n")
+        script_file.write(f"LOG_FILE={get_log_file_path(task['name'])}\n")
+        script_file.write(f"{task['command']} >> $LOG_FILE 2>&1\n")
+    
+    os.chmod(script_path, 0o755)
+    return script_path
 
 # Windows 专用函数
 def update_windows_task(task):
@@ -426,15 +441,20 @@ def run_task(task_name):
 @app.route('/task/log/<task_name>')
 def get_task_log(task_name):
     task = get_task(task_name)
-    if not task or not task.get('log_file'):
-        return jsonify({'error': 'Log file not configured'}), 404
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
     
-    log_file = task['log_file']
-    if not os.path.exists(log_file):
-        return jsonify({'error': 'Log file not found'}), 404
+    log_dir = os.path.join(BASE_DIR, 'logs', task_name)
+    if not os.path.exists(log_dir):
+        return jsonify({'error': 'Log directory not found'}), 404
     
     try:
-        with open(log_file, 'r') as f:
+        log_files = sorted(os.listdir(log_dir), reverse=True)
+        if not log_files:
+            return jsonify({'log': '日志为空'})
+        
+        latest_log_file = os.path.join(log_dir, log_files[0])
+        with open(latest_log_file, 'r') as f:
             content = f.read()
         return jsonify({'log': content})
     except Exception as e:
