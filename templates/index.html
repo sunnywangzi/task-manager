@@ -84,9 +84,30 @@
     </div>
     
     <div id="cron" class="tab-content">
-        <h2>当前 Cron 任务</h2>
-        <pre>{{ cron_jobs | join('\n') }}</pre>
+    <h2>当前 Cron 任务</h2>
+    <div class="cron-jobs">
+        {% for job in cron_jobs %}
+        <div class="cron-job {% if 'TaskManager:' in job %}task-manager-job{% else %}manual-job{% endif %}">
+            <pre>{{ job }}</pre>
+        </div>
+        {% endfor %}
     </div>
+</div>
+
+<style>
+    .task-manager-job {
+        background-color: #f0f8ff;
+        border-left: 4px solid #4682b4;
+        padding: 8px;
+        margin: 8px 0;
+    }
+    .manual-job {
+        background-color: #fff8f0;
+        border-left: 4px solid #cd853f;
+        padding: 8px;
+        margin: 8px 0;
+    }
+</style>
     
     <script>
         function showTab(tabId) {

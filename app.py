@@ -125,6 +125,13 @@ def remove_from_scheduler(task):
     elif platform.system() == 'Windows':
         remove_windows_task(task)
 
+def check_task_conflict(new_command):
+    cron_jobs = get_cron_jobs()
+    for job in cron_jobs:
+        if new_command in job:
+            return True
+    return False
+
 # Linux 专用函数
 def update_cron_job(task):
     # 获取当前cron任务
@@ -135,9 +142,11 @@ def update_cron_job(task):
         cron_lines = []
     
     # 移除旧任务(如果有)
-    cron_lines = [line for line in cron_lines if not line.strip().endswith(task['command'])]
+    task_comment = f"# TaskManager: {task['name']}"
+    cron_lines = [line for line in cron_lines if not line.strip().startswith(task_comment)]
     
-    # 添加新任务
+    # 添加新任务(带标签)
+    cron_lines.append(f"# TaskManager: {task['name']} - {task['description']}")
     cron_lines.append(f"{task['schedule']} {task['command']}")
     
     # 写入crontab
@@ -151,12 +160,45 @@ def remove_cron_job(task):
     except subprocess.CalledProcessError:
         return
     
-    # 移除匹配的任务
-    new_cron = [line for line in cron_lines if not line.strip().endswith(task['command'])]
+    # 找到要删除的任务索引
+    to_remove = []
+    task_comment = f"# TaskManager: {task['name']}"
+    for i, line in enumerate(cron_lines):
+        if line.strip().startswith(task_comment):
+            to_remove.extend([i, i+1])  # 删除注释行和命令行
+            break
+    
+    # 创建新cron内容(排除要删除的行)
+    new_cron = [line for i, line in enumerate(cron_lines) if i not in to_remove]
     
     # 写入crontab
     process = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE)
     process.communicate(input='\n'.join(new_cron).encode())
+
+def get_cron_jobs():
+    try:
+        output = subprocess.check_output(['crontab', '-l'], stderr=subprocess.PIPE).decode()
+        lines = output.splitlines()
+        
+        jobs = []
+        current_comment = ""
+        
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                if line.startswith("# TaskManager:"):
+                    current_comment = line
+                continue
+            
+            if current_comment:
+                jobs.append(f"{current_comment}\n{line}")
+                current_comment = ""
+            else:
+                jobs.append(line)
+        
+        return jobs
+    except subprocess.CalledProcessError:
+        return []
 
 # Windows 专用函数
 def update_windows_task(task):
