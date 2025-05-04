@@ -20,7 +20,11 @@
 </head>
 <body>
     <h1>任务管理面板</h1>
-    
+    	{% if platform == "Windows" %}
+	<div class="platform-note">当前运行在 Windows 平台</div>
+	{% elif platform == "Linux" %}
+	<div class="platform-note">当前运行在 Linux 平台</div>
+	{% endif %}
     <div class="tab-links">
         <span class="tab-link active" onclick="showTab('tasks')">任务列表</span>
         <span class="tab-link" onclick="showTab('cron')">Cron 任务</span>

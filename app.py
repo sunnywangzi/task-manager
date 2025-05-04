@@ -3,195 +3,295 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 import subprocess
 import os
 import json
+import platform
 from datetime import datetime, timedelta
+import sqlite3  # 改用SQLite数据库更可靠
 
 app = Flask(__name__)
 
 # 配置文件路径
-DB_FILE = os.path.join(os.path.dirname(__file__), 'task_db.json')
-HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'task_history.json')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, 'tasks.db')
 
-def load_db():
-    if not os.path.exists(DB_FILE):
-        return {}
-    with open(DB_FILE, 'r') as f:
-        return json.load(f)
-
-def save_db(data):
-    with open(DB_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-def load_history():
-    if not os.path.exists(HISTORY_FILE):
-        return {}
-    with open(HISTORY_FILE, 'r') as f:
-        return json.load(f)
-
-def save_history(data):
-    with open(HISTORY_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-def record_task_run(task_name, success=True):
-    history = load_history()
-    if task_name not in history:
-        history[task_name] = []
+# 初始化数据库
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
     
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    history[task_name].append({
-        'time': timestamp,
-        'status': 'success' if success else 'failed'
-    })
+    # 创建任务表
+    c.execute('''CREATE TABLE IF NOT EXISTS tasks
+                 (name TEXT PRIMARY KEY,
+                  schedule TEXT,
+                  command TEXT,
+                  description TEXT,
+                  log_file TEXT,
+                  platform TEXT)''')
     
-    # 只保留最近30次记录
-    history[task_name] = history[task_name][-30:]
-    save_history(history)
+    # 创建历史记录表
+    c.execute('''CREATE TABLE IF NOT EXISTS task_history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  task_name TEXT,
+                  run_time TEXT,
+                  status TEXT,
+                  output TEXT)''')
+    
+    conn.commit()
+    conn.close()
 
-def get_cron_jobs():
+# 数据库操作函数
+def get_tasks():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM tasks")
+    tasks = {row[0]: dict(zip(['name', 'schedule', 'command', 'description', 'log_file', 'platform'], row)) 
+              for row in c.fetchall()}
+    conn.close()
+    return tasks
+
+def save_task(task):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''REPLACE INTO tasks VALUES (?,?,?,?,?,?)''',
+              (task['name'], task['schedule'], task['command'], 
+               task['description'], task['log_file'], platform.system()))
+    conn.commit()
+    conn.close()
+    update_system_scheduler(task)
+
+def delete_task(task_name):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    
+    # 先从系统计划中移除
+    task = get_task(task_name)
+    if task:
+        remove_from_scheduler(task)
+    
+    c.execute("DELETE FROM tasks WHERE name=?", (task_name,))
+    conn.commit()
+    conn.close()
+
+def get_task(task_name):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM tasks WHERE name=?", (task_name,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return dict(zip(['name', 'schedule', 'command', 'description', 'log_file', 'platform'], row))
+    return None
+
+def record_task_run(task_name, success=True, output=""):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''INSERT INTO task_history (task_name, run_time, status, output)
+                 VALUES (?,?,?,?)''',
+              (task_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
+               'success' if success else 'failed', output))
+    conn.commit()
+    conn.close()
+
+def get_task_history(task_name, limit=10):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''SELECT run_time, status, output FROM task_history 
+                 WHERE task_name=? ORDER BY run_time DESC LIMIT ?''',
+              (task_name, limit))
+    history = [{'time': row[0], 'status': row[1], 'output': row[2]} 
+               for row in c.fetchall()]
+    conn.close()
+    return history
+
+def get_tasks_ran_today():
+    today = datetime.now().strftime('%Y-%m-%d')
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''SELECT DISTINCT task_name FROM task_history 
+                 WHERE run_time LIKE ?''', (f"{today}%",))
+    tasks = [row[0] for row in c.fetchall()]
+    conn.close()
+    return tasks
+
+# 平台相关的任务调度功能
+def update_system_scheduler(task):
+    if platform.system() == 'Linux':
+        update_cron_job(task)
+    elif platform.system() == 'Windows':
+        update_windows_task(task)
+
+def remove_from_scheduler(task):
+    if platform.system() == 'Linux':
+        remove_cron_job(task)
+    elif platform.system() == 'Windows':
+        remove_windows_task(task)
+
+# Linux 专用函数
+def update_cron_job(task):
+    # 获取当前cron任务
     try:
-        output = subprocess.check_output(['crontab', '-l'], stderr=subprocess.PIPE).decode()
-        return output.splitlines()
+        cron_output = subprocess.check_output(['crontab', '-l'], stderr=subprocess.PIPE).decode()
+        cron_lines = cron_output.splitlines()
     except subprocess.CalledProcessError:
-        return []
-
-def add_cron_job(schedule, command):
-    current_cron = get_cron_jobs()
-    new_job = f"{schedule} {command}"
+        cron_lines = []
     
-    # 检查是否已存在相同命令的任务
-    for job in current_cron:
-        if job.strip().endswith(command.strip()):
-            return False
+    # 移除旧任务(如果有)
+    cron_lines = [line for line in cron_lines if not line.strip().endswith(task['command'])]
     
     # 添加新任务
-    current_cron.append(new_job)
-    cron_content = '\n'.join(current_cron) + '\n'
+    cron_lines.append(f"{task['schedule']} {task['command']}")
     
     # 写入crontab
     process = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE)
-    process.communicate(input=cron_content.encode())
-    return True
+    process.communicate(input='\n'.join(cron_lines).encode())
 
-def remove_cron_job(command):
-    current_cron = get_cron_jobs()
-    new_cron = [job for job in current_cron if not job.strip().endswith(command.strip())]
+def remove_cron_job(task):
+    try:
+        cron_output = subprocess.check_output(['crontab', '-l'], stderr=subprocess.PIPE).decode()
+        cron_lines = cron_output.splitlines()
+    except subprocess.CalledProcessError:
+        return
     
-    if len(new_cron) == len(current_cron):
-        return False
+    # 移除匹配的任务
+    new_cron = [line for line in cron_lines if not line.strip().endswith(task['command'])]
     
     # 写入crontab
-    cron_content = '\n'.join(new_cron) + '\n'
     process = subprocess.Popen(['crontab', '-'], stdin=subprocess.PIPE)
-    process.communicate(input=cron_content.encode())
-    return True
+    process.communicate(input='\n'.join(new_cron).encode())
 
+# Windows 专用函数
+def update_windows_task(task):
+    # 先删除同名任务(如果存在)
+    remove_windows_task(task)
+    
+    # 创建新任务
+    task_name = f"TaskManager_{task['name']}"
+    command = f'python -c "import os; os.system(\'{task["command"]}\')"'
+    
+    # 使用schtasks命令创建计划任务
+    try:
+        subprocess.run([
+            'schtasks', '/Create', '/TN', task_name,
+            '/TR', command,
+            '/SC', 'DAILY',
+            '/ST', '00:00',
+            '/F'
+        ], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to create Windows task: {e}")
+
+def remove_windows_task(task):
+    task_name = f"TaskManager_{task['name']}"
+    try:
+        subprocess.run(['schtasks', '/Delete', '/TN', task_name, '/F'], check=True)
+    except subprocess.CalledProcessError:
+        pass
+
+# Web 路由
 @app.route('/')
 def index():
-    tasks = load_db()
-    history = load_history()
-    cron_jobs = get_cron_jobs()
+    tasks = get_tasks()
+    tasks_ran_today = get_tasks_ran_today()
     
-    # 检查每个任务今天是否运行过
-    today = datetime.now().strftime('%Y-%m-%d')
-    for task_name in tasks:
-        tasks[task_name]['ran_today'] = False
-        tasks[task_name]['last_run'] = None
-        
-        if task_name in history and history[task_name]:
-            last_run = history[task_name][-1]['time']
-            tasks[task_name]['last_run'] = last_run
-            if last_run.startswith(today):
-                tasks[task_name]['ran_today'] = True
+    # 为每个任务添加状态信息
+    for name, task in tasks.items():
+        task['ran_today'] = name in tasks_ran_today
+        history = get_task_history(name, 1)
+        task['last_run'] = history[0]['time'] if history else '从未运行'
     
-    return render_template('index.html', tasks=tasks, cron_jobs=cron_jobs)
+    # 获取系统当前计划任务
+    if platform.system() == 'Linux':
+        try:
+            cron_jobs = subprocess.check_output(['crontab', '-l']).decode().splitlines()
+        except:
+            cron_jobs = ["无法获取cron任务"]
+    elif platform.system() == 'Windows':
+        try:
+            cron_jobs = subprocess.check_output(
+                ['schtasks', '/Query', '/FO', 'LIST', '/V'],
+                creationflags=subprocess.CREATE_NO_WINDOW).decode().splitlines()
+        except:
+            cron_jobs = ["无法获取计划任务"]
+    else:
+        cron_jobs = ["不支持的系统平台"]
+    
+    return render_template('index.html', 
+                         tasks=tasks, 
+                         cron_jobs=cron_jobs,
+                         platform=platform.system())
 
 @app.route('/task/add', methods=['GET', 'POST'])
 def add_task():
     if request.method == 'POST':
-        tasks = load_db()
-        task_name = request.form['name']
-        
-        tasks[task_name] = {
-            'name': task_name,
+        task = {
+            'name': request.form['name'],
             'schedule': request.form['schedule'],
             'command': request.form['command'],
             'description': request.form['description'],
             'log_file': request.form['log_file']
         }
-        
-        # 添加到crontab
-        add_cron_job(request.form['schedule'], request.form['command'])
-        
-        save_db(tasks)
+        save_task(task)
         return redirect(url_for('index'))
     
     return render_template('edit_task.html', task=None)
 
 @app.route('/task/edit/<task_name>', methods=['GET', 'POST'])
 def edit_task(task_name):
-    tasks = load_db()
-    if task_name not in tasks:
+    task = get_task(task_name)
+    if not task:
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        # 先移除旧cron任务
-        old_command = tasks[task_name]['command']
-        remove_cron_job(old_command)
-        
-        # 更新任务信息
-        tasks[task_name] = {
+        updated_task = {
             'name': task_name,
             'schedule': request.form['schedule'],
             'command': request.form['command'],
             'description': request.form['description'],
             'log_file': request.form['log_file']
         }
-        
-        # 添加新cron任务
-        add_cron_job(request.form['schedule'], request.form['command'])
-        
-        save_db(tasks)
+        save_task(updated_task)
         return redirect(url_for('index'))
     
-    return render_template('edit_task.html', task=tasks[task_name])
+    return render_template('edit_task.html', task=task)
 
 @app.route('/task/delete/<task_name>')
-def delete_task(task_name):
-    tasks = load_db()
-    if task_name in tasks:
-        # 从crontab中移除
-        remove_cron_job(tasks[task_name]['command'])
-        
-        del tasks[task_name]
-        save_db(tasks)
-    
+def delete_task_route(task_name):
+    delete_task(task_name)
     return redirect(url_for('index'))
 
 @app.route('/task/run/<task_name>')
 def run_task(task_name):
-    tasks = load_db()
-    if task_name not in tasks:
+    task = get_task(task_name)
+    if not task:
         return jsonify({'error': 'Task not found'}), 404
     
-    command = tasks[task_name]['command']
     try:
-        result = subprocess.run(
-            command.split(), 
-            capture_output=True, 
-            text=True,
-            timeout=300
-        )
+        # 在Windows上需要特殊处理命令
+        if platform.system() == 'Windows':
+            result = subprocess.run(
+                task['command'],
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+        else:
+            result = subprocess.run(
+                task['command'].split(),
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
         
-        # 记录执行历史
-        record_task_run(task_name, result.returncode == 0)
+        output = f"Return code: {result.returncode}\n\nStdout:\n{result.stdout}\n\nStderr:\n{result.stderr}"
+        record_task_run(task_name, result.returncode == 0, output)
         
         return jsonify({
             'success': True,
             'returncode': result.returncode,
-            'stdout': result.stdout,
-            'stderr': result.stderr
+            'output': output
         })
     except Exception as e:
-        record_task_run(task_name, False)
+        record_task_run(task_name, False, str(e))
         return jsonify({
             'success': False,
             'error': str(e)
@@ -199,11 +299,11 @@ def run_task(task_name):
 
 @app.route('/task/log/<task_name>')
 def get_task_log(task_name):
-    tasks = load_db()
-    if task_name not in tasks or not tasks[task_name].get('log_file'):
+    task = get_task(task_name)
+    if not task or not task.get('log_file'):
         return jsonify({'error': 'Log file not configured'}), 404
     
-    log_file = tasks[task_name]['log_file']
+    log_file = task['log_file']
     if not os.path.exists(log_file):
         return jsonify({'error': 'Log file not found'}), 404
     
@@ -215,12 +315,10 @@ def get_task_log(task_name):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/task/history/<task_name>')
-def get_task_history(task_name):
-    history = load_history()
-    if task_name not in history:
-        return jsonify({'history': []})
-    
-    return jsonify({'history': history[task_name]})
+def get_task_history_route(task_name):
+    history = get_task_history(task_name, 10)
+    return jsonify({'history': history})
 
 if __name__ == '__main__':
+    init_db()
     app.run(host='0.0.0.0', port=5000, debug=True)
