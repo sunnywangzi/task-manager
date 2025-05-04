@@ -188,7 +188,8 @@ def update_cron_job(task):
     
     # 添加新任务(带标签)
     cron_lines.append(f"# TaskManager: {task['name']} - {task['description']}")
-    cron_lines.append(f"{task['schedule']} {task['command']}")
+    script_path = generate_task_script(task)
+    cron_lines.append(f"{task['schedule']} {script_path} >> {get_log_file_path(task['name'])} 2>&1")
     
     # 写入crontab
     write_crontab(cron_lines)
@@ -259,6 +260,20 @@ def get_cron_jobs():
         return jobs
     except subprocess.CalledProcessError:
         return []
+
+def generate_task_script(task):
+    script_dir = os.path.join(BASE_DIR, 'sh')
+    os.makedirs(script_dir, exist_ok=True)
+    
+    script_path = os.path.join(script_dir, f"{task['name']}.sh")
+    with open(script_path, 'w') as script_file:
+        script_file.write(f"#!/bin/bash\n")
+        script_file.write(f"cd {task.get('working_dir', BASE_DIR)}\n")
+        script_file.write(f"LOG_FILE={get_log_file_path(task['name'])}\n")
+        script_file.write(f"{task['command']} >> $LOG_FILE 2>&1\n")
+    
+    os.chmod(script_path, 0o755)
+    return script_path
 
 # Windows 专用函数
 def update_windows_task(task):
