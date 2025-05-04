@@ -75,7 +75,7 @@ def save_task(task):
     conn.close()
     update_system_scheduler(task)
 
-def delete_task(task_name):
+def delete_task_1(task_name):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
@@ -336,7 +336,7 @@ def edit_task(task_name):
 
 @app.route('/task/delete/<task_name>')
 def delete_task(task_name):
-    delete_task(task_name)
+    delete_task_1(task_name)
     return redirect(url_for('index'))
 
 @app.route('/task/run/<task_name>')
