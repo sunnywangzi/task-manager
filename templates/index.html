@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>任务管理面板</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .status-ok { color: green; }
+        .status-warning { color: orange; }
+        .log-panel { background: #f5f5f5; padding: 10px; margin-top: 10px; }
+        pre { white-space: pre-wrap; margin: 0; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .tab-links { margin-bottom: 10px; }
+        .tab-link { padding: 5px 10px; cursor: pointer; }
+        .tab-link.active { background: #ddd; }
+    </style>
+</head>
+<body>
+    <h1>任务管理面板</h1>
+    
+    <div class="tab-links">
+        <span class="tab-link active" onclick="showTab('tasks')">任务列表</span>
+        <span class="tab-link" onclick="showTab('cron')">Cron 任务</span>
+    </div>
+    
+    <div id="tasks" class="tab-content active">
+        <h2>任务列表 <button onclick="location.href='{{ url_for('add_task') }}'">添加任务</button></h2>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>名称</th>
+                    <th>描述</th>
+                    <th>计划</th>
+                    <th>状态</th>
+                    <th>最后运行</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for name, task in tasks.items() %}
+                <tr>
+                    <td>{{ name }}</td>
+                    <td>{{ task.description }}</td>
+                    <td>{{ task.schedule }}</td>
+                    <td class="status-{% if task.ran_today %}ok{% else %}warning{% endif %}">
+                        {% if task.ran_today %}今天已运行{% else %}今天未运行{% endif %}
+                    </td>
+                    <td>{{ task.last_run or '从未运行' }}</td>
+                    <td>
+                        <button onclick="runTask('{{ name }}')">运行</button>
+                        <button onclick="showLog('{{ name }}')">日志</button>
+                        <button onclick="showHistory('{{ name }}')">历史</button>
+                        <a href="{{ url_for('edit_task', task_name=name) }}">编辑</a>
+                        <a href="{{ url_for('delete_task', task_name=name) }}" 
+                           onclick="return confirm('确定删除吗？')">删除</a>
+                    </td>
+                </tr>
+                <tr id="log-{{ name }}" class="log-row" style="display: none;">
+                    <td colspan="6">
+                        <div class="log-panel">
+                            <pre id="log-content-{{ name }}"></pre>
+                        </div>
+                    </td>
+                </tr>
+                <tr id="history-{{ name }}" class="history-row" style="display: none;">
+                    <td colspan="6">
+                        <div class="log-panel">
+                            <h4>执行历史</h4>
+                            <div id="history-content-{{ name }}"></div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <div id="cron" class="tab-content">
+        <h2>当前 Cron 任务</h2>
+        <pre>{{ cron_jobs | join('\n') }}</pre>
+    </div>
+    
+    <script>
+        function showTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            
+            document.getElementById(tabId).classList.add('active');
+            document.querySelector(`.tab-link[onclick="showTab('${tabId}')"]`).classList.add('active');
+        }
+        
+        function showLog(taskName) {
+            const logRow = document.getElementById(`log-${taskName}`);
+            const isVisible = logRow.style.display !== 'none';
+            
+            // 隐藏所有日志面板
+            document.querySelectorAll('.log-row').forEach(row => {
+                row.style.display = 'none';
+            });
+            
+            // 隐藏所有历史面板
+            document.querySelectorAll('.history-row').forEach(row => {
+                row.style.display = 'none';
+            });
+            
+            if (!isVisible) {
+                fetch(`/task/log/${taskName}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        const logContent = document.getElementById(`log-content-${taskName}`);
+                        if (data.error) {
+                            logContent.textContent = `错误: ${data.error}`;
+                        } else {
+                            logContent.textContent = data.log || '日志为空';
+                        }
+                        logRow.style.display = '';
+                    });
+            }
+        }
+        
+        function showHistory(taskName) {
+            const historyRow = document.getElementById(`history-${taskName}`);
+            const isVisible = historyRow.style.display !== 'none';
+            
+            // 隐藏所有日志面板
+            document.querySelectorAll('.log-row').forEach(row => {
+                row.style.display = 'none';
+            });
+            
+            // 隐藏所有历史面板
+            document.querySelectorAll('.history-row').forEach(row => {
+                row.style.display = 'none';
+            });
+            
+            if (!isVisible) {
+                fetch(`/task/history/${taskName}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        const historyContent = document.getElementById(`history-content-${taskName}`);
+                        if (data.error) {
+                            historyContent.innerHTML = `错误: ${data.error}`;
+                        } else {
+                            let html = '<table border="1"><tr><th>时间</th><th>状态</th></tr>';
+                            data.history.forEach(entry => {
+                                html += `<tr><td>${entry.time}</td><td>${entry.status}</td></tr>`;
+                            });
+                            html += '</table>';
+                            historyContent.innerHTML = html || '无历史记录';
+                        }
+                        historyRow.style.display = '';
+                    });
+            }
+        }
+        
+        function runTask(taskName) {
+            if (!confirm(`确定要立即运行 ${taskName} 吗？`)) return;
+            
+            fetch(`/task/run/${taskName}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(`运行失败: ${data.error}`);
+                    } else {
+                        alert(`任务已启动\n返回码: ${data.returncode}\n输出: ${data.stdout}`);
+                        // 刷新页面以更新状态
+                        location.reload();
+                    }
+                });
+        }
+    </script>
+</body>
+</html>

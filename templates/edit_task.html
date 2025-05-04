@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% if task %}编辑{% else %}添加{% endif %}任务</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: inline-block; width: 120px; }
+        input, textarea { width: 300px; padding: 5px; }
+        textarea { height: 100px; }
+    </style>
+</head>
+<body>
+    <h1>{% if task %}编辑{% else %}添加{% endif %}任务</h1>
+    
+    <form method="post">
+        <div class="form-group">
+            <label for="name">任务名称:</label>
+            <input type="text" id="name" name="name" 
+                   value="{{ task.name if task else '' }}" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="schedule">Cron表达式:</label>
+            <input type="text" id="schedule" name="schedule" 
+                   value="{{ task.schedule if task else '' }}" 
+                   placeholder="* * * * *" required>
+            <small>格式: 分 时 日 月 周</small>
+        </div>
+        
+        <div class="form-group">
+            <label for="command">命令:</label>
+            <input type="text" id="command" name="command" 
+                   value="{{ task.command if task else '' }}" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="description">描述:</label>
+            <input type="text" id="description" name="description" 
+                   value="{{ task.description if task else '' }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="log_file">日志文件:</label>
+            <input type="text" id="log_file" name="log_file" 
+                   value="{{ task.log_file if task else '' }}">
+        </div>
+        
+        <div class="form-group">
+            <button type="submit">保存</button>
+            <a href="{{ url_for('index') }}">取消</a>
+        </div>
+    </form>
+</body>
+</html>
