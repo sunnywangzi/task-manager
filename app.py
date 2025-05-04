@@ -194,25 +194,46 @@ def update_cron_job(task):
     write_crontab(cron_lines)
 
 def remove_cron_job(task):
+    """
+    从crontab中安全地移除指定的任务
+    """
     try:
+        # 获取当前crontab内容
         cron_output = subprocess.check_output(['crontab', '-l'], stderr=subprocess.PIPE).decode()
         cron_lines = cron_output.splitlines()
     except subprocess.CalledProcessError:
+        # 如果crontab为空或出错，则不需要执行删除
         return
     
-    # 找到要删除的任务索引
-    to_remove = []
-    task_comment = f"# TaskManager: {task['name']}"
-    for i, line in enumerate(cron_lines):
-        if line.strip().startswith(task_comment):
-            to_remove.extend([i, i+1])  # 删除注释行和命令行
-            break
+    task_identifier = f"# TaskManager: {task['name']}"
+    task_command = task['command']
     
-    # 创建新cron内容(排除要删除的行)
-    new_cron = [line for i, line in enumerate(cron_lines) if i not in to_remove]
+    # 使用更灵活的方式查找和移除任务
+    new_cron_lines = []
+    skip_next = False
+    i = 0
     
-    # 写入crontab
-    write_crontab(new_cron)
+    while i < len(cron_lines):
+        line = cron_lines[i].strip()
+        
+        # 如果当前行包含任务标识符，或者包含任务命令且之前的行有任务标识符
+        if task_identifier in line:
+            skip_next = True  # 标记需要跳过下一行(通常是命令行)
+        elif skip_next and task_command in line:
+            skip_next = False  # 已找到并跳过了命令行
+        else:
+            if skip_next and not line:
+                # 如果标记需要跳过且当前行为空，继续跳过
+                skip_next = False
+            else:
+                # 保留其他所有行
+                new_cron_lines.append(cron_lines[i])
+        
+        i += 1
+    
+    # 写入新的crontab内容
+    if new_cron_lines != cron_lines:  # 只有在有变化时才重写
+        write_crontab(new_cron_lines)
 
 def get_cron_jobs():
     try:
