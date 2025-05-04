@@ -276,7 +276,7 @@ def generate_task_script(task):
     script_path = os.path.join(script_dir, f"{task['name']}.sh")
     with open(script_path, 'w') as script_file:
         script_file.write(f"#!/bin/bash\n")
-        script_file.write(f"current_time=$(date +"%Y-%m-%d_%H-%M-%S")\n")        
+        script_file.write(f'current_time=$(date +"%Y-%m-%d_%H-%M-%S")\n')     
         script_file.write(f"cd {task.get('working_dir', BASE_DIR)}\n")
         script_file.write(f"LOG_FILE={get_log_dir(task['name'])}/$current_time.log\n")
         script_file.write(f"{task['command']} >> $LOG_FILE 2>&1\n")
