@@ -191,8 +191,7 @@ def update_cron_job(task):
         cron_lines = []
     
     # 移除旧任务(如果有)
-    task_comment = f"# TaskManager: {task['name']}"
-    cron_lines = [line for line in cron_lines if not line.strip().startswith(task_comment)]
+    remove_from_scheduler(task)
     
     # 添加新任务(带标签)
     cron_lines.append(f"# TaskManager: {task['name']} - {task['description']}")
@@ -215,30 +214,17 @@ def remove_cron_job(task):
         return
     
     task_identifier = f"# TaskManager: {task['name']}"
-    task_command = task['command']
-    
-    # 使用更灵活的方式查找和移除任务
     new_cron_lines = []
-    skip_next = False
     i = 0
     
     while i < len(cron_lines):
-        line = cron_lines[i].strip()
-        
-        # 如果当前行包含任务标识符，或者包含任务命令且之前的行有任务标识符
+        line = cron_lines[i]
         if task_identifier in line:
-            skip_next = True  # 标记需要跳过下一行(通常是命令行)
-        elif skip_next and task_command in line:
-            skip_next = False  # 已找到并跳过了命令行
+            # 跳过当前行(注释行)和下一行(实际命令)
+            i += 2
         else:
-            if skip_next and not line:
-                # 如果标记需要跳过且当前行为空，继续跳过
-                skip_next = False
-            else:
-                # 保留其他所有行
-                new_cron_lines.append(cron_lines[i])
-        
-        i += 1
+            new_cron_lines.append(line)
+            i += 1
     
     # 写入新的crontab内容
     if new_cron_lines != cron_lines:  # 只有在有变化时才重写
